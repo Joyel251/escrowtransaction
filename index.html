@@ -1,0 +1,448 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FreeTezz — Tezos Escrow (Temple via Beacon)</title>
+    <script src="https://unpkg.com/@airgap/beacon-sdk@4.0.0/dist/walletbeacon.min.js"></script>
+    <style>
+      :root {
+        --bg: #0b0f14;
+        --panel: #121821;
+        --text: #e9eef5;
+        --muted: #9fb1c7;
+        --primary: #5cc8ff;
+        --accent: #00d8a4;
+        --danger: #ff6b6b;
+        --border: #253140;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; font-family: ui-sans-serif, system-ui, Segoe UI, Roboto, Arial; background: var(--bg); color: var(--text); }
+      header { padding: 18px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+      header h1 { margin: 0; font-size: 18px; letter-spacing: 0.3px; }
+      main { padding: 22px; max-width: 1100px; margin: 0 auto; }
+      .row { display: grid; grid-template-columns: repeat(12, 1fr); gap: 16px; }
+      .col-4 { grid-column: span 4; }
+      .col-6 { grid-column: span 6; }
+      .col-8 { grid-column: span 8; }
+      .col-12 { grid-column: span 12; }
+      .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+      .card h3 { margin: 0 0 10px; font-size: 16px; }
+      label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+      input, textarea, select { width: 100%; background: #0e141c; border: 1px solid var(--border); color: var(--text); padding: 10px 12px; border-radius: 8px; outline: none; }
+      textarea { min-height: 90px; resize: vertical; }
+      .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+      button { background: var(--primary); color: #001018; border: 0; padding: 10px 14px; border-radius: 8px; cursor: pointer; font-weight: 600; }
+      button.secondary { background: #2a394d; color: var(--text); }
+      button.danger { background: var(--danger); color: #1b0a0a; }
+      button:disabled { opacity: 0.6; cursor: not-allowed; }
+      .pill { display: inline-flex; align-items: center; gap: 8px; background: #0e141c; border: 1px solid var(--border); padding: 8px 10px; border-radius: 999px; font-size: 12px; color: var(--muted); }
+      #log { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: #0a0e13; color: #d7e4f2; padding: 12px; border-radius: 8px; white-space: pre-wrap; min-height: 40px; border: 1px solid var(--border); }
+      .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+      .hint { color: var(--muted); font-size: 12px; }
+      a { color: var(--primary); text-decoration: none; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>FreeTezz — Escrow on Tezos</h1>
+      <div class="actions">
+        <div class="pill" id="wallet-pill">Not connected</div>
+        <button id="connect">Connect Temple</button>
+        <button id="disconnect" class="secondary" disabled>Disconnect</button>
+        <button id="checkBalance" class="secondary" disabled>Check Balance</button>
+      </div>
+    </header>
+    <main>
+      <div class="row">
+        <section class="col-12 card">
+          <div class="grid2">
+            <div>
+              <h3>API Settings</h3>
+              <label for="apiBase">Backend API Base URL</label>
+              <input id="apiBase" type="text" placeholder="http://localhost:4000" />
+              <div class="actions">
+                <button id="saveApiBase" class="secondary">Save</button>
+                <button id="pingApi" class="secondary">Ping API</button>
+                <span class="hint">Point this UI at your live backend.</span>
+              </div>
+            </div>
+            <div>
+              <h3>Network</h3>
+              <label for="network">Temple Network</label>
+              <select id="network">
+                <option value="ghostnet" selected>Ghostnet (Testnet)</option>
+                <option value="mainnet">Mainnet</option>
+              </select>
+              <div class="hint">Switch to mainnet when ready.</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="col-6 card">
+          <h3>Create Job (Client)</h3>
+          <label for="jobTitle">Title</label>
+          <input id="jobTitle" placeholder="Design a landing page" />
+          <label for="jobDesc">Description</label>
+          <textarea id="jobDesc" placeholder="Scope, deliverables, milestones..."></textarea>
+          <div class="grid2">
+            <div>
+              <label for="jobBudget">Budget (ꜩ)</label>
+              <input id="jobBudget" type="number" step="0.000001" min="0" placeholder="100" />
+            </div>
+            <div>
+              <label for="jobCurrency">Currency</label>
+              <input id="jobCurrency" value="XTZ" disabled />
+            </div>
+          </div>
+          <div class="actions">
+            <button id="createJob">Post Job</button>
+          </div>
+          <div class="hint">Creates a job in backend; deposit happens via escrow.</div>
+        </section>
+
+        <section class="col-6 card">
+          <h3>Find / Load Job</h3>
+          <label for="jobId">Job ID</label>
+          <input id="jobId" placeholder="e.g. 42" />
+          <div class="actions">
+            <button id="loadJob" class="secondary">Load Job</button>
+          </div>
+          <pre id="jobView" class="hint" style="overflow:auto; max-height:180px">Job details will appear here.</pre>
+        </section>
+
+        <section class="col-6 card">
+          <h3>Accept Job (Freelancer)</h3>
+          <label for="acceptJobId">Job ID</label>
+          <input id="acceptJobId" placeholder="Job ID" />
+          <div class="actions">
+            <button id="acceptJob">Accept</button>
+          </div>
+          <div class="hint">Registers you as the freelancer on the backend.</div>
+        </section>
+
+        <section class="col-6 card">
+          <h3>Deposit Escrow (Client)</h3>
+          <label for="depositJobId">Job ID</label>
+          <input id="depositJobId" placeholder="Job ID" />
+          <label for="depositAmount">Amount (ꜩ)</label>
+          <input id="depositAmount" type="number" step="0.000001" min="0" placeholder="100" />
+          <div class="actions">
+            <button id="deposit">Deposit to Escrow</button>
+          </div>
+          <div class="hint">Backend returns prepared operation; Temple will request to sign and send.</div>
+        </section>
+
+        <section class="col-6 card">
+          <h3>Submit Work (Freelancer)</h3>
+          <label for="submitJobId">Job ID</label>
+          <input id="submitJobId" placeholder="Job ID" />
+          <label for="workUrl">Work URL / Hash</label>
+          <input id="workUrl" placeholder="Link to deliverable or IPFS hash" />
+          <div class="actions">
+            <button id="submitWork">Submit</button>
+          </div>
+        </section>
+
+        <section class="col-6 card">
+          <h3>Approve & Release (Client)</h3>
+          <label for="approveJobId">Job ID</label>
+          <input id="approveJobId" placeholder="Job ID" />
+          <div class="actions">
+            <button id="approve">Approve & Release Payment</button>
+          </div>
+          <div class="hint">Triggers contract call prepared by backend; funds release to freelancer.</div>
+        </section>
+
+        <section class="col-12 card">
+          <h3>Dispute</h3>
+          <div class="grid2">
+            <div>
+              <label for="disputeJobId">Job ID</label>
+              <input id="disputeJobId" placeholder="Job ID" />
+            </div>
+            <div>
+              <label for="disputeReason">Reason</label>
+              <input id="disputeReason" placeholder="Short reason" />
+            </div>
+          </div>
+          <div class="actions">
+            <button id="dispute" class="danger">Open Dispute</button>
+          </div>
+        </section>
+
+        <section class="col-12 card">
+          <h3>Log</h3>
+          <div id="log">Ready.</div>
+        </section>
+      </div>
+    </main>
+
+    <script>
+      // --- Beacon client ---
+      const client = new beacon.DAppClient({ name: 'FreeTezz dApp' });
+
+      // --- State ---
+      let activeAccount = undefined; // { address, network }
+
+      const els = {
+        connect: document.getElementById('connect'),
+        disconnect: document.getElementById('disconnect'),
+        walletPill: document.getElementById('wallet-pill'),
+        log: document.getElementById('log'),
+        apiBase: document.getElementById('apiBase'),
+        saveApiBase: document.getElementById('saveApiBase'),
+        network: document.getElementById('network'),
+        // create job
+        jobTitle: document.getElementById('jobTitle'),
+        jobDesc: document.getElementById('jobDesc'),
+        jobBudget: document.getElementById('jobBudget'),
+        createJob: document.getElementById('createJob'),
+        // load job
+        jobId: document.getElementById('jobId'),
+        loadJob: document.getElementById('loadJob'),
+        jobView: document.getElementById('jobView'),
+        // accept
+        acceptJobId: document.getElementById('acceptJobId'),
+        acceptJob: document.getElementById('acceptJob'),
+        // deposit
+        depositJobId: document.getElementById('depositJobId'),
+        depositAmount: document.getElementById('depositAmount'),
+        deposit: document.getElementById('deposit'),
+        // submit
+        submitJobId: document.getElementById('submitJobId'),
+        workUrl: document.getElementById('workUrl'),
+        submitWork: document.getElementById('submitWork'),
+        // approve
+        approveJobId: document.getElementById('approveJobId'),
+        approve: document.getElementById('approve'),
+        // dispute
+        disputeJobId: document.getElementById('disputeJobId'),
+        disputeReason: document.getElementById('disputeReason'),
+  dispute: document.getElementById('dispute'),
+  checkBalance: document.getElementById('checkBalance')
+      };
+
+      // Persisted settings
+      const SETTINGS = {
+        get apiBase() { return localStorage.getItem('ft_apiBase') || 'http://localhost:4000'; },
+        set apiBase(v) { localStorage.setItem('ft_apiBase', v); },
+        get network() { return localStorage.getItem('ft_network') || 'ghostnet'; },
+        set network(v) { localStorage.setItem('ft_network', v); }
+      };
+      els.apiBase.value = SETTINGS.apiBase;
+      els.network.value = SETTINGS.network;
+
+      function fmtPkhShort(addr) { return addr ? addr.slice(0, 6) + '…' + addr.slice(-6) : ''; }
+      function log(msg) { const now = new Date().toLocaleTimeString(); els.log.textContent = `[${now}] ${msg}`; }
+      function errMsg(err) { return (err && (err.message || err.error || err.toString())) || 'Unknown error'; }
+
+      async function api(path, { method = 'GET', body } = {}) {
+        const base = SETTINGS.apiBase.replace(/\/$/, '');
+        const url = base + path;
+        const init = { method, mode: 'cors', headers: { 'Content-Type': 'application/json' } };
+        if (body !== undefined) init.body = JSON.stringify(body);
+        const res = await fetch(url, init);
+        const text = await res.text();
+        let json; try { json = text ? JSON.parse(text) : undefined; } catch { json = { raw: text }; }
+        if (!res.ok) throw new Error(json?.message || json?.error || res.statusText);
+        return json;
+      }
+
+      // Quick API reachability check to help diagnose CORS/URL issues
+      async function pingApiBase() {
+        const base = SETTINGS.apiBase.replace(/\/$/, '');
+        const candidates = ['/api/health', '/health', '/status', '/api/status'];
+        for (const path of candidates) {
+          try {
+            const res = await fetch(base + path, { method: 'GET', mode: 'cors' });
+            log(`Ping ${path}: HTTP ${res.status}`);
+            if (res.ok) return true;
+          } catch (e) {
+            log(`Ping ${path} failed (likely CORS/URL): ${errMsg(e)}`);
+          }
+        }
+        alert('Ping failed. Verify API Base URL and CORS on backend. See log for details.');
+        return false;
+      }
+
+      async function connectTemple() {
+        try {
+          els.connect.disabled = true;
+          const net = els.network.value;
+          const permissions = await client.requestPermissions({ network: { type: net } });
+          activeAccount = { address: permissions.address, network: net };
+          els.walletPill.textContent = `Connected ${fmtPkhShort(permissions.address)} @ ${net}`;
+          els.disconnect.disabled = false;
+          els.checkBalance.disabled = false;
+          log('Wallet connected.');
+        } catch (err) {
+          log('Wallet connect failed: ' + errMsg(err));
+          alert('Wallet connect failed: ' + errMsg(err));
+        } finally {
+          if (!activeAccount) els.connect.disabled = false;
+        }
+      }
+
+      async function disconnectTemple() {
+        try {
+          // Beacon keeps permissions; we can just reset UI state
+          await client.destroy();
+        } catch {}
+        activeAccount = undefined;
+  els.connect.disabled = false; els.disconnect.disabled = true; els.checkBalance.disabled = true;
+        els.walletPill.textContent = 'Not connected';
+        log('Disconnected.');
+      }
+
+      // Prepared operation sender using Beacon
+      async function sendPreparedOperation(prep) {
+        if (!activeAccount) throw new Error('Wallet not connected');
+        if (!prep) throw new Error('Invalid prepared operation');
+        // Preferred: backend returns { operationDetails: [ { kind, destination, amount, parameters? }, ... ] }
+        if (Array.isArray(prep.operationDetails)) {
+          const { transactionHash } = await client.requestOperation({ operationDetails: prep.operationDetails });
+          log('Submitted: ' + transactionHash);
+          return transactionHash;
+        }
+        // Simple fallback: transfer
+        if (prep.type === 'transfer') {
+          const amount = String(prep.amountMutez ?? 0);
+          const op = [{ kind: beacon.TezosOperationType.TRANSACTION, destination: prep.to, amount }];
+          const { transactionHash } = await client.requestOperation({ operationDetails: op });
+          log('Submitted: ' + transactionHash);
+          return transactionHash;
+        }
+        throw new Error('Unsupported prepared op; backend must return operationDetails');
+      }
+
+      // --- UI events ---
+      els.connect.addEventListener('click', connectTemple);
+      els.disconnect.addEventListener('click', disconnectTemple);
+      els.saveApiBase.addEventListener('click', () => {
+        SETTINGS.apiBase = els.apiBase.value.trim();
+        SETTINGS.network = els.network.value;
+        log(`Saved API: ${SETTINGS.apiBase} | Network: ${SETTINGS.network}`);
+      });
+      
+      // Check balance via TzKT
+      async function checkBalance() {
+        try {
+          if (!activeAccount) throw new Error('Connect wallet first');
+          const addr = activeAccount.address;
+          const net = els.network.value;
+          const url = net === 'mainnet'
+            ? `https://api.tzkt.io/v1/accounts/${addr}`
+            : `https://api.ghostnet.tzkt.io/v1/accounts/${addr}`;
+          const res = await fetch(url, { method: 'GET' });
+          if (!res.ok) throw new Error('Explorer query failed');
+          const data = await res.json();
+          const xtz = (data && typeof data.balance === 'number') ? (data.balance / 1_000_000) : 0;
+          els.walletPill.textContent = `Connected ${fmtPkhShort(addr)} @ ${net} — ${xtz.toFixed(6)} ꜩ`;
+          log(`Balance: ${xtz} ꜩ on ${net}`);
+        } catch (e) {
+          alert('Check balance failed: ' + errMsg(e));
+          log('Check balance failed: ' + errMsg(e));
+        }
+      }
+      els.checkBalance.addEventListener('click', checkBalance);
+  document.getElementById('pingApi').addEventListener('click', pingApiBase);
+
+      // Create job
+      els.createJob.addEventListener('click', async () => {
+        try {
+          if (!activeAccount) throw new Error('Connect wallet first');
+          const title = els.jobTitle.value.trim();
+          const description = els.jobDesc.value.trim();
+          const budgetTez = parseFloat(els.jobBudget.value);
+          if (!title || !(budgetTez >= 0)) throw new Error('Title and budget are required');
+          const amountMutez = Math.round((isNaN(budgetTez) ? 0 : budgetTez) * 1_000_000);
+          const body = { title, amountMutez, clientAddress: activeAccount.address };
+          if (description) body.description = description;
+          const res = await api('/api/jobs', { method: 'POST', body });
+          log(`Job created: ${res?.id ?? JSON.stringify(res)}`);
+          if (res?.id != null) {
+            const id = res.id; els.jobId.value = id; els.depositJobId.value = id; els.acceptJobId.value = id; els.submitJobId.value = id; els.approveJobId.value = id; els.disputeJobId.value = id;
+          }
+        } catch (err) { alert('Create job failed: ' + errMsg(err)); log('Create job failed: ' + errMsg(err)); }
+      });
+
+      // Load job
+      els.loadJob.addEventListener('click', async () => {
+        try {
+          const id = (els.jobId.value || '').trim(); if (!id) throw new Error('Job ID required');
+          const job = await api(`/api/jobs/${encodeURIComponent(id)}`);
+          els.jobView.textContent = JSON.stringify(job, null, 2);
+          log('Job loaded.');
+        } catch (err) { alert('Load job failed: ' + errMsg(err)); log('Load job failed: ' + errMsg(err)); }
+      });
+
+      // Accept job
+      els.acceptJob.addEventListener('click', async () => {
+        try {
+          if (!activeAccount) throw new Error('Connect wallet first');
+          const id = (els.acceptJobId.value || '').trim(); if (!id) throw new Error('Job ID required');
+          const res = await api(`/api/jobs/${encodeURIComponent(id)}/accept`, { method: 'POST', body: { freelancerPkh: activeAccount.address } });
+          log(`Accepted job: ${JSON.stringify(res)}`);
+        } catch (err) { alert('Accept job failed: ' + errMsg(err)); log('Accept job failed: ' + errMsg(err)); }
+      });
+
+      // Deposit escrow (prepare -> wallet -> confirm)
+      els.deposit.addEventListener('click', async () => {
+        try {
+          if (!activeAccount) throw new Error('Connect wallet first');
+          const id = (els.depositJobId.value || '').trim();
+          const amountTez = parseFloat(els.depositAmount.value);
+          if (!id || !(amountTez > 0)) throw new Error('Job ID and positive amount required');
+          log('Preparing escrow deposit…');
+          const prep = await api(`/api/jobs/${encodeURIComponent(id)}/deposit/prepare`, { method: 'POST', body: { fromPkh: activeAccount.address, amountTez } });
+          const opHash = await sendPreparedOperation(prep);
+          const confirm = await api(`/api/jobs/${encodeURIComponent(id)}/deposit/confirm`, { method: 'POST', body: { fromPkh: activeAccount.address, opHash } });
+          log(`Escrow deposit confirmed: ${JSON.stringify(confirm)}`);
+        } catch (err) { alert('Deposit failed: ' + errMsg(err)); log('Deposit failed: ' + errMsg(err)); }
+      });
+
+      // Submit work
+      els.submitWork.addEventListener('click', async () => {
+        try {
+          if (!activeAccount) throw new Error('Connect wallet first');
+          const id = (els.submitJobId.value || '').trim();
+          const workUrl = (els.workUrl.value || '').trim();
+          if (!id || !workUrl) throw new Error('Job ID and Work URL/Hash required');
+          const res = await api(`/api/jobs/${encodeURIComponent(id)}/submit`, { method: 'POST', body: { freelancerPkh: activeAccount.address, workUrl } });
+          log(`Work submitted: ${JSON.stringify(res)}`);
+        } catch (err) { alert('Submit failed: ' + errMsg(err)); log('Submit failed: ' + errMsg(err)); }
+      });
+
+      // Approve & release (prepare -> wallet -> confirm)
+      els.approve.addEventListener('click', async () => {
+        try {
+          if (!activeAccount) throw new Error('Connect wallet first');
+          const id = (els.approveJobId.value || '').trim(); if (!id) throw new Error('Job ID required');
+          log('Preparing release…');
+          const prep = await api(`/api/jobs/${encodeURIComponent(id)}/release/prepare`, { method: 'POST', body: { clientPkh: activeAccount.address } });
+          const opHash = await sendPreparedOperation(prep);
+          const confirm = await api(`/api/jobs/${encodeURIComponent(id)}/release/confirm`, { method: 'POST', body: { clientPkh: activeAccount.address, opHash } });
+          log(`Payment released: ${JSON.stringify(confirm)}`);
+        } catch (err) { alert('Approve failed: ' + errMsg(err)); log('Approve failed: ' + errMsg(err)); }
+      });
+
+      // Dispute
+      els.dispute.addEventListener('click', async () => {
+        try {
+          if (!activeAccount) throw new Error('Connect wallet first');
+          const id = (els.disputeJobId.value || '').trim();
+          const reason = (els.disputeReason.value || '').trim();
+          if (!id || !reason) throw new Error('Job ID and reason required');
+          const res = await api(`/api/jobs/${encodeURIComponent(id)}/dispute`, { method: 'POST', body: { pkh: activeAccount.address, reason } });
+          log(`Dispute opened: ${JSON.stringify(res)}`);
+        } catch (err) { alert('Dispute failed: ' + errMsg(err)); log('Dispute failed: ' + errMsg(err)); }
+      });
+
+      // Init
+      (function init() {
+        log('Ready. Configure API base and connect your wallet.');
+      })();
+    </script>
+  </body>
+  </html>
