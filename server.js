@@ -7,7 +7,7 @@ require('dotenv').config();
 const express = require('express');
 const path = require('path');
 const cors = require('cors');
-const { nanoid } = require('nanoid');
+const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -19,6 +19,7 @@ app.use(cors({
   allowedHeaders: ['Content-Type','Authorization']
 }));
 app.use(express.json());
+
 // Serve static files (frontend) from workspace root
 app.use(express.static(path.join(__dirname)));
 
@@ -27,10 +28,33 @@ app.get(['/api/health', '/health', '/status', '/api/status'], (req, res) => {
   res.json({ ok: true, service: 'freetezz-backend', ts: Date.now() });
 });
 
-// In-memory DB
-const db = {
-  jobs: new Map(), // id -> job
-};
+// Persistent storage using JSON file
+const fs = require('fs');
+const dbPath = '/tmp/jobs.json';
+
+// Load existing jobs or create empty store
+function loadDB() {
+  try {
+    if (fs.existsSync(dbPath)) {
+      const data = fs.readFileSync(dbPath, 'utf8');
+      return JSON.parse(data);
+    }
+  } catch (err) {
+    console.log('DB load error:', err.message);
+  }
+  return {};
+}
+
+// Save jobs to file
+function saveDB(jobs) {
+  try {
+    fs.writeFileSync(dbPath, JSON.stringify(jobs, null, 2));
+  } catch (err) {
+    console.log('DB save error:', err.message);
+  }
+}
+
+let jobs = loadDB();
 
 function toMutez(xtz) { return Math.round(Number(xtz || 0) * 1_000_000); }
 function now() { return new Date().toISOString(); }
@@ -41,7 +65,7 @@ app.post('/api/jobs', (req, res) => {
   if (!title || typeof amountMutez !== 'number' || !clientAddress) {
     return res.status(400).json({ message: 'title, amountMutez, clientAddress are required' });
   }
-  const id = nanoid(8);
+  const id = crypto.randomBytes(4).toString('hex');
   const job = {
     id,
     title,
@@ -55,20 +79,21 @@ app.post('/api/jobs', (req, res) => {
     updatedAt: now(),
     escrow: { deposited: 0, opHashes: [] }
   };
-  db.jobs.set(id, job);
+  jobs[id] = job;
+  saveDB(jobs);
   return res.json({ id, job });
 });
 
 // Get job
 app.get('/api/jobs/:id', (req, res) => {
-  const job = db.jobs.get(req.params.id);
+  const job = jobs[req.params.id];
   if (!job) return res.status(404).json({ message: 'Job not found' });
   res.json(job);
 });
 
 // Accept job (freelancer)
 app.post('/api/jobs/:id/accept', (req, res) => {
-  const job = db.jobs.get(req.params.id);
+  const job = jobs[req.params.id];
   if (!job) return res.status(404).json({ message: 'Job not found' });
   const { freelancerPkh } = req.body || {};
   if (!freelancerPkh) return res.status(400).json({ message: 'freelancerPkh is required' });
@@ -76,12 +101,13 @@ app.post('/api/jobs/:id/accept', (req, res) => {
   job.freelancerAddress = freelancerPkh;
   job.status = 'ACCEPTED';
   job.updatedAt = now();
+  saveDB(jobs);
   res.json({ ok: true, job });
 });
 
 // Submit work (freelancer)
 app.post('/api/jobs/:id/submit', (req, res) => {
-  const job = db.jobs.get(req.params.id);
+  const job = jobs[req.params.id];
   if (!job) return res.status(404).json({ message: 'Job not found' });
   const { freelancerPkh, workUrl } = req.body || {};
   if (!freelancerPkh || !workUrl) return res.status(400).json({ message: 'freelancerPkh and workUrl are required' });
@@ -90,25 +116,27 @@ app.post('/api/jobs/:id/submit', (req, res) => {
   job.submission = { workUrl, at: now() };
   job.status = 'SUBMITTED';
   job.updatedAt = now();
+  saveDB(jobs);
   res.json({ ok: true, job });
 });
 
 // Dispute (either party)
 app.post('/api/jobs/:id/dispute', (req, res) => {
-  const job = db.jobs.get(req.params.id);
+  const job = jobs[req.params.id];
   if (!job) return res.status(404).json({ message: 'Job not found' });
   const { pkh, reason } = req.body || {};
   if (!pkh || !reason) return res.status(400).json({ message: 'pkh and reason are required' });
   job.dispute = { by: pkh, reason, at: now() };
   job.status = 'DISPUTED';
   job.updatedAt = now();
+  saveDB(jobs);
   res.json({ ok: true, job });
 });
 
 // --- Escrow flows (mocked operationDetails) ---
 // Deposit prepare -> client signs -> deposit confirm
 app.post('/api/jobs/:id/deposit/prepare', (req, res) => {
-  const job = db.jobs.get(req.params.id);
+  const job = jobs[req.params.id];
   if (!job) return res.status(404).json({ message: 'Job not found' });
   const { fromPkh, amountTez } = req.body || {};
   if (!fromPkh || typeof amountTez !== 'number') return res.status(400).json({ message: 'fromPkh and amountTez are required' });
@@ -127,7 +155,7 @@ app.post('/api/jobs/:id/deposit/prepare', (req, res) => {
 });
 
 app.post('/api/jobs/:id/deposit/confirm', (req, res) => {
-  const job = db.jobs.get(req.params.id);
+  const job = jobs[req.params.id];
   if (!job) return res.status(404).json({ message: 'Job not found' });
   const { fromPkh, opHash } = req.body || {};
   if (!fromPkh || !opHash) return res.status(400).json({ message: 'fromPkh and opHash are required' });
@@ -136,12 +164,13 @@ app.post('/api/jobs/:id/deposit/confirm', (req, res) => {
   job.escrow.opHashes.push(opHash);
   job.status = 'FUNDED';
   job.updatedAt = now();
+  saveDB(jobs);
   res.json({ ok: true, job });
 });
 
 // Release prepare -> client signs -> release confirm
 app.post('/api/jobs/:id/release/prepare', (req, res) => {
-  const job = db.jobs.get(req.params.id);
+  const job = jobs[req.params.id];
   if (!job) return res.status(404).json({ message: 'Job not found' });
   const { clientPkh } = req.body || {};
   if (!clientPkh) return res.status(400).json({ message: 'clientPkh is required' });
@@ -157,7 +186,7 @@ app.post('/api/jobs/:id/release/prepare', (req, res) => {
 });
 
 app.post('/api/jobs/:id/release/confirm', (req, res) => {
-  const job = db.jobs.get(req.params.id);
+  const job = jobs[req.params.id];
   if (!job) return res.status(404).json({ message: 'Job not found' });
   const { clientPkh, opHash } = req.body || {};
   if (!clientPkh || !opHash) return res.status(400).json({ message: 'clientPkh and opHash are required' });
@@ -165,6 +194,7 @@ app.post('/api/jobs/:id/release/confirm', (req, res) => {
   job.status = 'RELEASED';
   job.updatedAt = now();
   job.release = { opHash, at: now() };
+  saveDB(jobs);
   res.json({ ok: true, job });
 });
 
@@ -173,7 +203,12 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-app.listen(PORT, () => {
-  console.log(`FreeTezz backend listening on http://localhost:${PORT}`);
-  console.log('CORS origins:', FRONTEND_ORIGINS);
-});
+// ✅ Export for Vercel OR run locally
+if (process.env.VERCEL) {
+  module.exports = app;
+} else {
+  app.listen(PORT, () => {
+    console.log(`FreeTezz backend listening on http://localhost:${PORT}`);
+    console.log('CORS origins:', FRONTEND_ORIGINS);
+  });
+}

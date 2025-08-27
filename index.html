@@ -63,6 +63,7 @@
               <input id="apiBase" type="text" placeholder="http://localhost:4000" />
               <div class="actions">
                 <button id="saveApiBase" class="secondary">Save</button>
+                <button id="useOrigin" class="secondary">Use Current Origin</button>
                 <button id="pingApi" class="secondary">Ping API</button>
                 <span class="hint">Point this UI at your live backend.</span>
               </div>
@@ -223,9 +224,19 @@
   checkBalance: document.getElementById('checkBalance')
       };
 
+      // Compute a sensible default API base: use current origin in production, localhost in dev
+      function defaultApiBase() {
+        try {
+          const loc = window.location;
+          const host = loc?.hostname || '';
+          const isLocal = host === 'localhost' || host === '127.0.0.1';
+          if (!isLocal && loc?.origin?.startsWith('http')) return loc.origin;
+        } catch {}
+        return 'http://localhost:4000';
+      }
       // Persisted settings
       const SETTINGS = {
-        get apiBase() { return localStorage.getItem('ft_apiBase') || 'http://localhost:4000'; },
+        get apiBase() { return localStorage.getItem('ft_apiBase') || defaultApiBase(); },
         set apiBase(v) { localStorage.setItem('ft_apiBase', v); },
         get network() { return localStorage.getItem('ft_network') || 'ghostnet'; },
         set network(v) { localStorage.setItem('ft_network', v); }
@@ -323,6 +334,12 @@
         SETTINGS.apiBase = els.apiBase.value.trim();
         SETTINGS.network = els.network.value;
         log(`Saved API: ${SETTINGS.apiBase} | Network: ${SETTINGS.network}`);
+      });
+      document.getElementById('useOrigin').addEventListener('click', () => {
+        const origin = window.location.origin;
+        SETTINGS.apiBase = origin;
+        els.apiBase.value = origin;
+        log(`Using current origin for API: ${origin}`);
       });
       
       // Check balance via TzKT
@@ -441,7 +458,23 @@
 
       // Init
       (function init() {
-        log('Ready. Configure API base and connect your wallet.');
+        // Auto-correct stale localhost API base when hosted on Vercel
+        try {
+          const saved = SETTINGS.apiBase;
+          const origin = window.location.origin;
+          const host = window.location.hostname;
+          const isLocal = host === 'localhost' || host === '127.0.0.1';
+          const looksLocal = /^http:\/\/localhost:?\d*/i.test(saved) || /^http:\/\/127\.0\.0\.1:?\d*/i.test(saved);
+          if (!isLocal && looksLocal && origin) {
+            SETTINGS.apiBase = origin;
+            els.apiBase.value = origin;
+            log(`API base reset to current origin: ${origin}`);
+          } else {
+            log('Ready. Configure API base and connect your wallet.');
+          }
+        } catch {
+          log('Ready. Configure API base and connect your wallet.');
+        }
       })();
     </script>
   </body>
